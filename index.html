@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Solar System Visualization with Targeted Zoom & Info Card</title>
+    
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: #eee;
+            font-family: 'Inter', sans-serif;
+            transition: cursor 0.3s;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(10, 20, 40, 0.9);
+            padding: 15px 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            z-index: 10;
+        }
+        #controls label {
+            font-weight: 600;
+            font-size: 14px;
+            color: #A0C0FF;
+            white-space: nowrap;
+        }
+        input[type=range] {
+            width: 150px;
+            -webkit-appearance: none;
+            height: 8px;
+            background: #444;
+            border-radius: 4px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #87CEEB;
+            cursor: pointer;
+            border: 2px solid #fff;
+            box-shadow: 0 0 5px #87CEEB;
+        }
+        #speedValue {
+            color: #87CEEB;
+            font-size: 16px;
+            min-width: 30px;
+            text-align: right;
+            font-family: monospace;
+        }
+        .planet-label {
+            position: absolute;
+            color: #fff;
+            font-size: 10px;
+            pointer-events: none;
+            white-space: nowrap;
+            text-shadow: 0 0 3px #000;
+            user-select: none;
+            transform: translate(-50%, -50%);
+        }
+
+        /* --- Info Card Styles (NEW) --- */
+        #infoCard {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            height: 100%;
+            background: rgba(10, 20, 40, 0.95);
+            backdrop-filter: blur(5px);
+            padding: 20px;
+            box-shadow: -8px 0 20px rgba(0, 0, 0, 0.7);
+            z-index: 20;
+            color: #E0EFFF;
+            transform: translateX(100%); /* Start hidden */
+            transition: transform 0.4s ease-out;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        #infoCard.visible {
+            transform: translateX(0); /* Slide in */
+        }
+        #infoCard h2 {
+            font-size: 24px;
+            color: #87CEEB;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #87CEEB;
+            padding-bottom: 10px;
+        }
+        .info-group p {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            padding: 5px 0;
+            border-bottom: 1px dashed rgba(160, 192, 255, 0.2);
+            font-size: 14px;
+        }
+        .info-group p strong {
+            color: #FFF;
+            font-weight: 500;
+        }
+        .info-group p span {
+            color: #A0C0FF;
+            text-align: right;
+        }
+        #infoCard button {
+            background: #87CEEB;
+            color: #101530;
+            border: none;
+            padding: 10px;
+            margin-top: 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s, transform 0.1s;
+        }
+        #infoCard button:hover {
+            background: #A0D8F0;
+        }
+        #infoCard button:active {
+            transform: scale(0.98);
+        }
+        #resetZoomBtn {
+             background: #334466;
+             color: #A0C0FF;
+             margin-bottom: 10px;
+        }
+        #resetZoomBtn:hover {
+            background: #445588;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <label for="speedSlider">Time Rate:</label>
+        <input type="range" id="speedSlider" min="0.01" max="5" step="0.01" value="0.1">
+        <span id="speedValue">0.10x</span>
+    </div>
+    
+    <!-- Planet Info Card -->
+    <div id="infoCard">
+        <button id="resetViewBtn">Reset View (Focus Sun)</button>
+        <h2 id="planetName">Select a Planet</h2>
+        <div class="info-group">
+            <p>Mass: <strong id="mass">---</strong> <span>(x10²⁴ kg)</span></p>
+            <p>Radius: <strong id="radius">---</strong> <span>(km)</span></p>
+            <p>Gravity: <strong id="gravity">---</strong> <span>(m/s²)</span></p>
+            <p>Orbital Distance: <strong id="distance">---</strong> <span>(AU)</span></p>
+            <p>Orbital Period: <strong id="period">---</strong> <span>(Earth days)</span></p>
+        </div>
+        <button onclick="closeInfoCard()">Close Card</button>
+    </div>
+
+<script>
+    // --- Setup Three.js ---
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000); 
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000);
+    document.body.appendChild(renderer.domElement);
+
+    const initialCameraPosition = new THREE.Vector3(0, 80, 150);
+    camera.position.copy(initialCameraPosition);
+    camera.lookAt(0, 0, 0); 
+
+    // Constants for scaling
+    const AU = 20; 
+    const PlanetScaleFactor = 2; 
+    const MoonScaleFactor = 0.5; 
+
+    // Controls and Speed
+    const speedSlider = document.getElementById('speedSlider');
+    const speedValueDisplay = document.getElementById('speedValue');
+    let timeSpeed = 0.1; 
+    
+    // Rotation and Drag Variables
+    let isDragging = false;
+    let previousMousePosition = { x: 0, y: 0 };
+    const rotationSpeed = 0.005; 
+
+    // Targeted Zoom Variables
+    let currentTarget = new THREE.Vector3(0, 0, 0); // Sun (center) by default
+    const cameraLookAt = new THREE.Vector3(0, 0, 0); // Always look at the target
+    
+    // Zoom variables
+    const zoomSpeed = 0.1;
+    const minZoom = 10; 
+    const maxZoom = 500; 
+    let currentCameraDistance = camera.position.length(); 
+
+    // Animation variables for smooth camera movement
+    const targetCameraPosition = camera.position.clone();
+    const cameraTransitionSpeed = 0.05;
+
+    // Raycasting variables
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let planetsForRaycasting = []; // Array to hold planetary meshes
+
+    // Handle speed slider
+    speedSlider.addEventListener('input', (e) => {
+        timeSpeed = parseFloat(e.target.value);
+        speedValueDisplay.textContent = timeSpeed.toFixed(2) + 'x';
+    });
+    
+    speedSlider.value = timeSpeed; 
+    speedValueDisplay.textContent = timeSpeed.toFixed(2) + 'x';
+
+    // --- Starfield ---
+    function createStarfield() {
+        const starGeometry = new THREE.BufferGeometry();
+        const starVertices = [];
+
+        for (let i = 0; i < 2000; i++) { 
+            const x = THREE.MathUtils.randFloatSpread(2000); 
+            const y = THREE.MathUtils.randFloatSpread(2000);
+            const z = THREE.MathUtils.randFloatSpread(2000);
+            starVertices.push(x, y, z);
+        }
+
+        starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
+        const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.8 }); 
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        scene.add(stars);
+    }
+    createStarfield();
+
+    // --- Solar System Data (Detailed Info) ---
+    // Source: Simplified values for visualization
+    const planetsData = [
+        { name: "Mercury", color: 0xA9A9A9, size: 0.3 * PlanetScaleFactor, orbitRadius: 1.5 * AU, speed: 0.047, mass: 0.33, radius: 2440, gravity: 3.7, period: 88, details: "The swift, innermost planet." },
+        { name: "Venus", color: 0xF0E68C, size: 0.6 * PlanetScaleFactor, orbitRadius: 2.5 * AU, speed: 0.035, mass: 4.87, radius: 6052, gravity: 8.9, period: 225, details: "Earth's 'sister planet' with extreme heat." },
+        { name: "Earth", color: 0x4682B4, size: 0.65 * PlanetScaleFactor, orbitRadius: 3.8 * AU, speed: 0.029, hasMoon: true, mass: 5.97, radius: 6371, gravity: 9.8, period: 365, details: "The only known planet to harbor life." },
+        { name: "Mars", color: 0xB22222, size: 0.5 * PlanetScaleFactor, orbitRadius: 5.5 * AU, speed: 0.024, mass: 0.64, radius: 3390, gravity: 3.7, period: 687, details: "The red planet, a target for human exploration." },
+        { name: "Jupiter", color: 0xD2B48C, size: 1.4 * PlanetScaleFactor, orbitRadius: 8.5 * AU, speed: 0.013, mass: 1898, radius: 71492, gravity: 24.8, period: 4333, details: "The largest planet, a gas giant." },
+        { name: "Saturn", color: 0xF4C430, size: 1.2 * PlanetScaleFactor, orbitRadius: 11.5 * AU, speed: 0.009, hasRings: true, mass: 568, radius: 60268, gravity: 10.4, period: 10759, details: "Known for its magnificent ring system." },
+        { name: "Uranus", color: 0xAFEEEE, size: 0.9 * PlanetScaleFactor, orbitRadius: 14.5 * AU, speed: 0.006, mass: 86.8, radius: 25559, gravity: 8.7, period: 30687, details: "An ice giant, rotating on its side." },
+        { name: "Neptune", color: 0x000080, size: 0.9 * PlanetScaleFactor, orbitRadius: 17.5 * AU, speed: 0.005, mass: 102, radius: 24764, gravity: 11.2, period: 60190, details: "The farthest known planet, a dark, cold ice giant." }
+    ];
+
+    const solarSystem = new THREE.Group();
+    scene.add(solarSystem);
+
+    // --- Lighting (The Sun) ---
+    const sunGeometry = new THREE.SphereGeometry(3 * PlanetScaleFactor, 32, 32); 
+    const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xFFD700 });
+    const sun = new THREE.Mesh(sunGeometry, sunMaterial);
+    solarSystem.add(sun);
+
+    const sunLight = new THREE.PointLight(0xffffff, 2, 0, 0); 
+    sunLight.position.set(0, 0, 0);
+    scene.add(sunLight);
+    scene.add(new THREE.AmbientLight(0x333333)); 
+
+    // --- Planet Creation ---
+    const planetMeshes = []; 
+    planetsData.forEach(data => {
+        const orbitGroup = new THREE.Group();
+        solarSystem.add(orbitGroup);
+
+        const planetGeometry = new THREE.SphereGeometry(data.size, 16, 16);
+        const planetMaterial = new THREE.MeshLambertMaterial({ color: data.color });
+        const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
+        
+        planetMesh.position.x = data.orbitRadius;
+        planetMesh.name = data.name; // Name for raycasting
+        
+        orbitGroup.userData = { 
+            speed: data.speed, 
+            angle: Math.random() * Math.PI * 2,
+            planetMesh: planetMesh,
+            name: data.name,
+            details: data // Store all data here for easy retrieval
+        };
+
+        orbitGroup.add(planetMesh);
+        planetMeshes.push(planetMesh); 
+        planetsForRaycasting.push(planetMesh);
+
+        // Add a small light to each planet to make them "visible" and distinct
+        const planetLight = new THREE.PointLight(data.color, 0.5, 15, 2); 
+        planetMesh.add(planetLight); 
+
+        // Create Orbit Line
+        const segments = 128;
+        const orbitGeometry = new THREE.BufferGeometry();
+        const points = [];
+        
+        for (let i = 0; i <= segments; i++) {
+            const theta = (i / segments) * Math.PI * 2;
+            const x = data.orbitRadius * Math.cos(theta);
+            const z = data.orbitRadius * Math.sin(theta);
+            points.push(new THREE.Vector3(x, 0, z));
+        }
+        
+        orbitGeometry.setFromPoints(points);
+        const orbitMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.1, transparent: true });
+        const orbitLine = new THREE.Line(orbitGeometry, orbitMaterial);
+        orbitGroup.add(orbitLine);
+        
+        // Add Rings (Saturn)
+        if (data.hasRings) {
+            const ringGeometry = new THREE.RingGeometry(data.size * 1.3, data.size * 2.5, 32); 
+            ringGeometry.rotateX(Math.PI / 2); 
+            const ringMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xCCBB99, 
+                side: THREE.DoubleSide, 
+                opacity: 0.6,
+                transparent: true
+            });
+            const ringMesh = new THREE.Mesh(ringGeometry, ringMaterial);
+            planetMesh.add(ringMesh);
+        }
+
+        // Add Moon (Earth)
+        if (data.hasMoon) {
+            const moonGeometry = new THREE.SphereGeometry(data.size * MoonScaleFactor, 8, 8);
+            const moonMaterial = new THREE.MeshLambertMaterial({ color: 0xAAAAAA });
+            const moonMesh = new THREE.Mesh(moonGeometry, moonMaterial);
+            moonMesh.position.set(data.size + 1.5, 0, 0); 
+            planetMesh.userData.moonMesh = moonMesh; 
+            planetMesh.add(moonMesh);
+
+            const moonLight = new THREE.PointLight(0xAAAAAA, 0.2, 5, 2);
+            moonMesh.add(moonLight);
+        }
+    });
+
+    // --- HTML Labels for Planets ---
+    const planetLabelDivs = new Map();
+    planetsData.forEach(data => {
+        const div = document.createElement('div');
+        div.className = 'planet-label';
+        div.textContent = data.name;
+        document.body.appendChild(div);
+        planetLabelDivs.set(data.name, div);
+    });
+
+    function updatePlanetLabels() {
+        planetMeshes.forEach(planetMesh => {
+            const name = planetMesh.parent.userData.name; 
+            const labelDiv = planetLabelDivs.get(name);
+            if (labelDiv) {
+                const vector = new THREE.Vector3();
+                planetMesh.getWorldPosition(vector); 
+
+                vector.project(camera);
+
+                const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+                const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+
+                // Simple depth check to prevent labels from drawing if planet is behind the camera
+                if (vector.z > 1) {
+                    labelDiv.style.display = 'none';
+                    return;
+                }
+                
+                labelDiv.style.display = 'block';
+                labelDiv.style.left = `${x}px`;
+                // Simple adjustment based on screen height for stability, ignoring complex zoom-based offsets
+                labelDiv.style.top = `${y - 20}px`; 
+            }
+        });
+    }
+
+    // --- Camera Target Logic ---
+
+    function setCameraTarget(targetPosition, newDistance) {
+        currentTarget.copy(targetPosition);
+        currentCameraDistance = newDistance;
+        // targetCameraPosition will be updated in the animation loop
+    }
+    
+    // We update the target camera position inside the animate loop based on the currentTarget and currentCameraDistance
+    // to allow for smooth transitions.
+
+    function resetView() {
+        setCameraTarget(new THREE.Vector3(0, 0, 0), initialCameraPosition.length());
+        closeInfoCard();
+    }
+
+    // --- Info Card Logic ---
+    const infoCard = document.getElementById('infoCard');
+    function showInfoCard(data) {
+        document.getElementById('planetName').textContent = data.name;
+        document.getElementById('mass').textContent = data.mass.toFixed(2);
+        document.getElementById('radius').textContent = data.radius.toLocaleString();
+        document.getElementById('gravity').textContent = data.gravity.toFixed(1);
+        document.getElementById('distance').textContent = (data.orbitRadius / AU).toFixed(2);
+        document.getElementById('period').textContent = data.period.toLocaleString();
+        infoCard.classList.add('visible');
+    }
+
+    function closeInfoCard() {
+        infoCard.classList.remove('visible');
+    }
+    
+    document.getElementById('resetViewBtn').addEventListener('click', resetView);
+
+
+    // --- Interaction & Event Listeners ---
+
+    // 1. Planet Click (Raycasting)
+    document.addEventListener('click', onPlanetClick, false);
+
+    function onPlanetClick(event) {
+        // Only trigger click if not currently dragging
+        if (isDragging) return;
+        
+        // Get mouse coordinates relative to the viewport
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, camera);
+
+        // Calculate objects intersecting the picking ray
+        const intersects = raycaster.intersectObjects(planetsForRaycasting);
+
+        if (intersects.length > 0) {
+            const clickedMesh = intersects[0].object;
+            const orbitGroup = clickedMesh.parent;
+            const planetData = orbitGroup.userData.details;
+            
+            // 1. Update Info Card
+            showInfoCard(planetData);
+
+            // 2. Set new Camera Target (Zoom in on planet)
+            const targetPosition = new THREE.Vector3();
+            clickedMesh.getWorldPosition(targetPosition);
+
+            // Calculate a comfortable zoom distance based on planet size and general scale
+            const zoomDistance = planetData.size * 2 + 50; 
+            
+            setCameraTarget(targetPosition, zoomDistance);
+        } else {
+            // If the card is open, close it if no planet was clicked
+            // We only close if the click was far from the info card area
+            if (event.clientX < window.innerWidth - 300 && infoCard.classList.contains('visible')) {
+                closeInfoCard();
+            }
+        }
+    }
+
+
+    // 2. Mouse Down/Move/Up (Rotation)
+    function onMouseDown(e) {
+        isDragging = true;
+        previousMousePosition.x = e.clientX;
+        previousMousePosition.y = e.clientY;
+        document.body.style.cursor = 'grabbing';
+    }
+
+    // *** FIX: Refactored MouseMove for correct rotation around the currentTarget (Sun or Planet) ***
+    function onMouseMove(e) {
+        if (!isDragging) {
+            // Check for hover cursor change
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(planetsForRaycasting);
+            document.body.style.cursor = intersects.length > 0 ? 'pointer' : 'default';
+            
+            return;
+        }
+
+        const deltaX = e.clientX - previousMousePosition.x;
+        const deltaY = e.clientY - previousMousePosition.y;
+        
+        // 1. Yaw (Horizontal mouse movement -> Rotation around the target's Y-axis)
+        const yawAngle = deltaX * -rotationSpeed;
+        camera.position.sub(currentTarget); // Translate to origin
+        camera.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), yawAngle);
+        camera.position.add(currentTarget); // Translate back
+
+        // 2. Pitch (Vertical mouse movement -> Rotation around the camera's local horizontal axis/right vector)
+        
+        // Get the direction of the camera relative to the target
+        const cameraDirection = new THREE.Vector3().subVectors(camera.position, currentTarget).normalize();
+        
+        // Calculate the "right" vector perpendicular to the camera's up and look direction
+        const rightVector = new THREE.Vector3().crossVectors(cameraDirection, camera.up).normalize();
+        
+        const pitchAngle = deltaY * rotationSpeed; // Invert deltaY for natural movement
+        
+        // Apply rotation around the right vector
+        camera.position.sub(currentTarget); // Translate to origin
+        camera.position.applyAxisAngle(rightVector, pitchAngle);
+        
+        // Prevent camera from flipping over the poles (optional clamping)
+        const newDirection = new THREE.Vector3().subVectors(camera.position, new THREE.Vector3(0,0,0)).normalize();
+        if (Math.abs(newDirection.dot(new THREE.Vector3(0, 1, 0))) < 0.98) { // Prevent getting too close to 90 degrees
+            camera.position.add(currentTarget); // Translate back
+        } else {
+            // If we hit the limit, revert the pitch change
+            camera.position.applyAxisAngle(rightVector, -pitchAngle); // Revert the pitch
+            camera.position.add(currentTarget); // Translate back
+        }
+        
+        previousMousePosition.x = e.clientX;
+        previousMousePosition.y = e.clientY;
+    }
+
+    function onMouseUp() {
+        isDragging = false;
+        document.body.style.cursor = 'default';
+    }
+
+    // 3. Mouse Wheel (Targeted Zoom)
+    function onMouseWheel(event) {
+        event.preventDefault(); 
+
+        const scrollAmount = event.deltaY * -0.01; 
+        const newDistance = currentCameraDistance + scrollAmount * zoomSpeed * currentCameraDistance; 
+
+        setCameraTarget(currentTarget, Math.max(minZoom, Math.min(maxZoom, newDistance)));
+    }
+
+
+    // 4. Touch/Resize/Utility Functions
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        updatePlanetLabels(); 
+    }
+
+    let initialPinchDistance = 0;
+    let isPinching = false;
+
+    function onTouchStart(e) {
+        if (e.touches.length === 2) { 
+            isPinching = true;
+            initialPinchDistance = getPinchDistance(e);
+            document.body.style.cursor = 'grab'; 
+        } else if (e.touches.length === 1) { 
+            onMouseDown(e.touches[0]);
+        }
+    }
+
+    function onTouchMove(e) {
+        e.preventDefault(); 
+
+        if (isPinching && e.touches.length === 2) {
+            const currentPinchDistance = getPinchDistance(e);
+            const pinchDelta = currentPinchDistance - initialPinchDistance;
+
+            const scrollAmount = pinchDelta * 0.1; 
+            const newDistance = currentCameraDistance - scrollAmount * zoomSpeed * currentCameraDistance * 0.1; 
+            
+            setCameraTarget(currentTarget, Math.max(minZoom, Math.min(maxZoom, newDistance)));
+
+            initialPinchDistance = currentPinchDistance; 
+        } else if (!isPinching && e.touches.length === 1) {
+            onMouseMove(e.touches[0]);
+        }
+    }
+
+    function onTouchEnd(e) {
+        isPinching = false;
+        onMouseUp(); 
+    }
+
+    function getPinchDistance(e) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+
+    // --- Animation Loop ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        const delta = clock.getDelta(); 
+
+        // 1. Orbital Movement
+        sun.rotation.y += 0.005 * timeSpeed;
+
+        solarSystem.children.forEach(group => {
+            if (group.userData.speed) {
+                group.userData.angle += group.userData.speed * timeSpeed * delta * 5; 
+                group.rotation.y = group.userData.angle;
+
+                if (group.userData.planetMesh && group.userData.planetMesh.userData.moonMesh) {
+                    const moon = group.userData.planetMesh.userData.moonMesh;
+                    moon.position.z = Math.cos(group.userData.angle * 12) * 1.5;
+                    moon.position.x = Math.sin(group.userData.angle * 12) * 1.5;
+                }
+            }
+        });
+        
+        // 2. Smooth Camera Transition (Linear Interpolation)
+        
+        // Calculate the vector pointing from the target to the current camera position
+        const direction = camera.position.clone().sub(cameraLookAt).normalize();
+
+        // Calculate the intended target position based on the desired distance
+        targetCameraPosition.copy(direction).multiplyScalar(currentCameraDistance).add(currentTarget);
+        
+        // Move camera position towards target position
+        camera.position.lerp(targetCameraPosition, cameraTransitionSpeed); 
+        
+        // Update the point the camera is looking at to the current target
+        cameraLookAt.lerp(currentTarget, cameraTransitionSpeed); 
+        camera.lookAt(cameraLookAt);
+
+        // 3. Update UI
+        updatePlanetLabels(); 
+
+        renderer.render(scene, camera);
+    }
+
+
+    // --- Initialize Event Listeners ---
+    window.addEventListener('resize', onWindowResize, false);
+    document.addEventListener('mousedown', onMouseDown, false);
+    document.addEventListener('mousemove', onMouseMove, false);
+    document.addEventListener('mouseup', onMouseUp, false);
+    document.addEventListener('wheel', onMouseWheel, { passive: false }); 
+
+    document.addEventListener('touchstart', onTouchStart, { passive: false });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd, false);
+
+    animate();
+
+</script>
+</body>
+</html>
